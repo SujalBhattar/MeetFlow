@@ -23,7 +23,7 @@ print("=" * 45)
 print("\nDECISIONS:")
 
 for decision in memory["decisions"]:
-    print("-", decision["description"])
+    print("-", decision["decision"])
 
 print("\nACTION ITEMS:")
 

@@ -1,5 +1,5 @@
 
-import hashlib
+from datetime import datetime
 
 import streamlit as st
 import pandas as pd
@@ -19,8 +19,12 @@ from database.db import (
     initialize_database,
     get_connection,
     get_all_decisions,
+    get_active_decisions,
     get_all_actions,
     get_all_reminders,
+    get_meeting_history,
+    meeting_exists,
+    record_meeting,
     save_decision,
     save_action,
     mark_action_exported,
@@ -53,43 +57,6 @@ st.set_page_config(
 # ==========================================
 # DATABASE HELPERS
 # ==========================================
-
-def initialize_app_database():
-    initialize_database()
-
-    with get_connection() as connection:
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS meetings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                transcript_hash TEXT UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-
-def record_meeting(title, transcript):
-    transcript_hash = hashlib.sha256(
-        transcript.encode("utf-8")
-    ).hexdigest()
-
-    with get_connection() as connection:
-        connection.execute("""
-            INSERT OR IGNORE INTO meetings (
-                title,
-                transcript_hash
-            )
-            VALUES (?, ?)
-        """, (title, transcript_hash))
-
-
-def get_meeting_history():
-    with get_connection() as connection:
-        return connection.execute("""
-            SELECT * FROM meetings
-            ORDER BY id DESC
-        """).fetchall()
-
 
 def get_decision_history():
     with get_connection() as connection:
@@ -193,7 +160,7 @@ def save_extraction(extraction, report):
 # INITIALIZATION
 # ==========================================
 
-initialize_app_database()
+initialize_database()
 
 
 # ==========================================
@@ -498,7 +465,7 @@ with st.sidebar:
 # FETCH DATABASE DATA
 # ==========================================
 
-decisions = get_all_decisions()
+decisions = get_active_decisions()
 actions = get_all_actions()
 reviews = get_reviews()
 meetings = get_meeting_history()
@@ -510,9 +477,18 @@ meetings = get_meeting_history()
 
 if page == "Overview":
 
+    current_hour = datetime.now().hour
+
+    if current_hour < 12:
+        greeting = "Good morning"
+    elif current_hour < 18:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+
     st.markdown(
         '<div class="eyebrow">YOUR WORKSPACE</div>'
-        '<div class="hero-title">Good afternoon.</div>'
+        f'<div class="hero-title">{greeting}.</div>'
         '<div class="hero-caption">'
         'A little more clarity. A lot more momentum.'
         '</div>',
@@ -687,6 +663,12 @@ elif page == "Analyze Meeting":
             if not transcript.strip():
                 st.error("The transcript is empty.")
 
+            elif meeting_exists(transcript):
+                st.warning(
+                    "This exact transcript has already been analyzed. "
+                    "Edit it or upload a different one."
+                )
+
             else:
 
                 try:
@@ -703,7 +685,8 @@ elif page == "Analyze Meeting":
 
                         create_pending_reviews(
                             report,
-                            extraction.decisions
+                            extraction.decisions,
+                            extraction.meeting_title
                         )
 
                         save_extraction(
@@ -1398,6 +1381,28 @@ elif page == "Deadline Reminders":
                 len(results["upcoming"])
             )
 
+            if results["email_sent"]:
+                st.success(
+                    f"{len(results['email_sent'])} reminder email(s) sent."
+                )
+
+            if results["email_failed"]:
+                st.error(
+                    f"{len(results['email_failed'])} email(s) failed. "
+                    "They will be retried on the next check."
+                )
+
+                for failure in results["email_failed"]:
+                    st.caption(
+                        f"{failure['task']} -> {failure['error']}"
+                    )
+
+            if results["email_skipped"]:
+                st.caption(
+                    f"{len(results['email_skipped'])} reminder(s) were not "
+                    "emailed (no owner or no registered address)."
+                )
+
             if results["skipped"]:
                 st.caption(
                     f"{len(results['skipped'])} task(s) skipped "
@@ -1438,6 +1443,10 @@ elif page == "Deadline Reminders":
 
                 st.caption(
                     f"Reminder created: {reminder['created_at']}"
+                    + (
+                        f" · Emailed: {reminder['emailed_at']}"
+                        if reminder["emailed_at"] else " · Not emailed"
+                    )
                 )
 
     else:
@@ -1785,7 +1794,7 @@ elif page == "Email Directory":
     """)
 
     st.info(
-        "Email delivery is not enabled yet. "
-        "This page currently manages the recipient directory. "
-        "We'll connect the email sender next."
+        "Reminder emails are sent from the Gmail account in your .env "
+        "file whenever you click 'Check deadlines now'. If a send fails, "
+        "or you add an address later, the next check tries again."
     )
